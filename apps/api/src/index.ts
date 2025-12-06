@@ -12,6 +12,21 @@ const HF_SPACES = {
   upscaler: 'https://tuan2308-upscaler.hf.space',
 }
 
+const ALLOWED_IMAGE_HOSTS = [
+  'luca115-z-image-turbo.hf.space',
+  'mcp-tools-qwen-image-fast.hf.space',
+  'tuan2308-upscaler.hf.space',
+]
+
+function isAllowedImageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return ALLOWED_IMAGE_HOSTS.some(host => parsed.hostname.endsWith(host))
+  } catch {
+    return false
+  }
+}
+
 function extractCompleteEventData(sseStream: string): unknown {
   const lines = sseStream.split('\n')
   let isCompleteEvent = false
@@ -150,11 +165,21 @@ app.post('/generate-hf', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400)
   }
 
-  if (!body.prompt) return c.json({ error: 'prompt is required' }, 400)
+  if (!body.prompt || typeof body.prompt !== 'string') {
+    return c.json({ error: 'prompt is required' }, 400)
+  }
+  if (body.prompt.length > 10000) {
+    return c.json({ error: 'prompt exceeds maximum length' }, 400)
+  }
 
   const hfToken = c.req.header('X-HF-Token')
   const width = body.width ?? 1024
   const height = body.height ?? 1024
+
+  if (width < 256 || width > 2048 || height < 256 || height > 2048) {
+    return c.json({ error: 'width and height must be between 256 and 2048' }, 400)
+  }
+
   const seed = body.seed ?? Math.floor(Math.random() * 2147483647)
   const baseUrl = body.model === 'qwen' ? HF_SPACES.qwen : HF_SPACES.zImage
 
@@ -177,10 +202,20 @@ app.post('/upscale', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400)
   }
 
-  if (!body.url) return c.json({ error: 'url is required' }, 400)
+  if (!body.url || typeof body.url !== 'string') {
+    return c.json({ error: 'url is required' }, 400)
+  }
+
+  if (!isAllowedImageUrl(body.url)) {
+    return c.json({ error: 'URL not allowed' }, 400)
+  }
 
   const hfToken = c.req.header('X-HF-Token')
   const scale = body.scale ?? 4
+
+  if (scale < 1 || scale > 4) {
+    return c.json({ error: 'scale must be between 1 and 4' }, 400)
+  }
 
   try {
     const data = await callGradioApi(

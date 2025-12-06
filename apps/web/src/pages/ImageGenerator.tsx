@@ -140,7 +140,23 @@ export default function ImageGenerator() {
     if (!initialized.current) {
       initialized.current = true;
       decryptFromStore().then(setApiKey);
-      setHfToken(localStorage.getItem("hfToken") || "");
+      // Decrypt HF Token
+      const stored = localStorage.getItem("hfToken");
+      if (stored) {
+        try {
+          const { iv, data } = JSON.parse(stored);
+          crypto.subtle.importKey("raw", new TextEncoder().encode(navigator.userAgent), "PBKDF2", false, ["deriveKey"])
+            .then(key => crypto.subtle.deriveKey(
+              { name: "PBKDF2", salt: new TextEncoder().encode("hf-salt"), iterations: 100000, hash: "SHA-256" },
+              key, { name: "AES-GCM", length: 256 }, false, ["decrypt"]
+            ))
+            .then(derivedKey => crypto.subtle.decrypt({ name: "AES-GCM", iv: new Uint8Array(iv) }, derivedKey, new Uint8Array(data)))
+            .then(decrypted => setHfToken(new TextDecoder().decode(decrypted)))
+            .catch(() => localStorage.removeItem("hfToken"));
+        } catch {
+          localStorage.removeItem("hfToken");
+        }
+      }
     }
   }, []);
 
@@ -184,10 +200,30 @@ export default function ImageGenerator() {
     if (key) toast.success("API Key saved");
   };
 
-  const saveHfToken = (token: string) => {
+  const saveHfToken = async (token: string) => {
     setHfToken(token);
-    localStorage.setItem("hfToken", token);
-    if (token) toast.success("HF Token saved");
+    if (token) {
+      const key = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(navigator.userAgent),
+        "PBKDF2",
+        false,
+        ["deriveKey"]
+      );
+      const derivedKey = await crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt: new TextEncoder().encode("hf-salt"), iterations: 100000, hash: "SHA-256" },
+        key,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt"]
+      );
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, derivedKey, new TextEncoder().encode(token));
+      localStorage.setItem("hfToken", JSON.stringify({ iv: Array.from(iv), data: Array.from(new Uint8Array(encrypted)) }));
+      toast.success("HF Token saved");
+    } else {
+      localStorage.removeItem("hfToken");
+    }
   };
 
   useEffect(() => {
