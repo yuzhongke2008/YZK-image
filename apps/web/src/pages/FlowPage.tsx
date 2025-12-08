@@ -38,19 +38,84 @@ function FlowCanvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [apiKey, setApiKey] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
   const nodeIdRef = useRef(0);
   const imagesRef = useRef<GeneratedImage[]>([]);
-  const { fitView } = useReactFlow();
+  const { fitView, setViewport } = useReactFlow();
+
+  // Create image generated handler
+  const handleImageGenerated = useCallback(
+    (nodeId: string, image: GeneratedImage) => {
+      imagesRef.current = [...imagesRef.current, image];
+      // Update node data with the generated image URL
+      setNodes((nds) =>
+        nds.map((node) =>
+          node.id === nodeId
+            ? { ...node, data: { ...node.data, imageUrl: image.url, duration: image.duration } }
+            : node
+        )
+      );
+    },
+    [setNodes]
+  );
+
+  // Auto-save when nodes/edges/images change
+  useEffect(() => {
+    if (!isLoaded) return;
+    const timeoutId = setTimeout(() => {
+      saveFlowState({
+        nodes,
+        edges,
+        images: imagesRef.current,
+        nodeIdCounter: nodeIdRef.current,
+      });
+    }, 500); // Debounce saves
+    return () => clearTimeout(timeoutId);
+  }, [nodes, edges, isLoaded]);
 
   // Load saved state on mount
   useEffect(() => {
     loadFlowState().then((state) => {
-      if (state && state.images.length > 0) {
-        imagesRef.current = state.images;
-        console.log(`Loaded ${state.images.length} images from IndexedDB`);
+      if (state && state.nodes && state.nodes.length > 0) {
+        // Restore images
+        imagesRef.current = state.images || [];
+        nodeIdRef.current = state.nodeIdCounter || 0;
+
+        // Create an image lookup map
+        const imageMap = new Map(imagesRef.current.map((img) => [img.id, img]));
+
+        // Restore nodes with callbacks and image URLs
+        const restoredNodes = state.nodes.map((node) => {
+          if (node.type === "aiResult") {
+            const image = imageMap.get(node.id);
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                imageUrl: image?.url || (node.data as AIResultNodeData).imageUrl,
+                duration: image?.duration || (node.data as AIResultNodeData).duration,
+                onImageGenerated: handleImageGenerated,
+              },
+            };
+          }
+          return node;
+        });
+
+        setNodes(restoredNodes);
+        setEdges(state.edges || []);
+
+        // Restore viewport if available
+        if (state.viewport) {
+          setTimeout(() => setViewport(state.viewport!), 100);
+        } else {
+          setTimeout(() => fitView({ padding: 0.2, duration: 500 }), 100);
+        }
+
+        console.log(`Restored ${restoredNodes.length} nodes, ${state.images?.length || 0} images`);
       }
+      setIsLoaded(true);
     });
-  }, []);
+  }, [setNodes, setEdges, setViewport, fitView, handleImageGenerated]);
 
   useEffect(() => {
     decryptFromStore().then((key) => setApiKey(key || ""));
@@ -64,15 +129,6 @@ function FlowCanvas() {
   const onConnect = useCallback(
     (params: Connection) => setEdges((eds) => addEdge(params, eds)),
     [setEdges]
-  );
-
-  const handleImageGenerated = useCallback(
-    (_nodeId: string, image: GeneratedImage) => {
-      imagesRef.current = [...imagesRef.current, image];
-      // Auto-save to IndexedDB
-      saveFlowState(imagesRef.current);
-    },
-    []
   );
 
   const handleDownloadAll = async () => {
@@ -193,7 +249,7 @@ function FlowCanvas() {
         </h1>
 
         <div className="flex items-center gap-2">
-          {imagesRef.current.length > 0 && (
+          {nodes.length > 0 && (
             <>
               <button
                 onClick={handleDownloadAll}

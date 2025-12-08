@@ -1,4 +1,5 @@
 import { openDB, type IDBPDatabase } from "idb";
+import type { Node, Edge, Viewport } from "@xyflow/react";
 
 export interface GeneratedImage {
   id: string;
@@ -13,8 +14,17 @@ export interface GeneratedImage {
   isUpscaled?: boolean;
 }
 
+// Serializable node data (without functions)
+export interface SerializableNodeData {
+  [key: string]: unknown;
+}
+
 export interface FlowState {
+  nodes: Node<SerializableNodeData>[];
+  edges: Edge[];
+  viewport?: Viewport;
   images: GeneratedImage[];
+  nodeIdCounter: number;
   updatedAt: number;
 }
 
@@ -55,14 +65,22 @@ export async function loadFlowState(): Promise<FlowState | null> {
   }
 }
 
-export async function saveFlowState(images: GeneratedImage[]): Promise<void> {
+export async function saveFlowState(state: Omit<FlowState, "updatedAt">): Promise<void> {
   try {
     const db = await getDB();
-    const state: FlowState = {
-      images,
+    // Strip functions from node data before saving
+    const serializableNodes = state.nodes.map((node) => ({
+      ...node,
+      data: Object.fromEntries(
+        Object.entries(node.data).filter(([, v]) => typeof v !== "function")
+      ),
+    }));
+    const fullState: FlowState = {
+      ...state,
+      nodes: serializableNodes,
       updatedAt: Date.now(),
     };
-    await db.put(STATE_STORE, state, STATE_KEY);
+    await db.put(STATE_STORE, fullState, STATE_KEY);
   } catch (e) {
     console.error("Failed to save flow state:", e);
   }
