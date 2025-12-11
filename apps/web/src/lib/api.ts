@@ -11,7 +11,7 @@ import type {
   UpscaleRequest,
   UpscaleResponse,
 } from '@z-image/shared'
-import type { ApiProvider } from './constants'
+import { PROVIDER_CONFIGS, type ProviderType } from './constants'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -20,7 +20,7 @@ export type ApiResponse<T> = { success: true; data: T } | { success: false; erro
 
 /** Generate image request options */
 export interface GenerateOptions {
-  provider: ApiProvider
+  provider: ProviderType
   prompt: string
   negativePrompt?: string
   width: number
@@ -30,10 +30,9 @@ export interface GenerateOptions {
   model?: string
 }
 
-/** Auth tokens for API calls */
-export interface AuthTokens {
-  apiKey?: string
-  hfToken?: string
+/** Auth token for API calls */
+export interface AuthToken {
+  token?: string
 }
 
 /**
@@ -41,36 +40,23 @@ export interface AuthTokens {
  */
 export async function generateImage(
   options: GenerateOptions,
-  tokens: AuthTokens
+  auth: AuthToken
 ): Promise<ApiResponse<GenerateSuccessResponse>> {
   const { provider, prompt, negativePrompt, width, height, steps, seed, model } = options
-  const { apiKey, hfToken } = tokens
+  const { token } = auth
 
-  // Determine endpoint and headers based on provider
-  const isGitee = provider === 'gitee'
-  const isHuggingFace = provider === 'hf-zimage' || provider === 'hf-qwen'
-
+  const providerConfig = PROVIDER_CONFIGS[provider]
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
   }
 
-  if (isGitee && apiKey) {
-    headers['X-API-Key'] = apiKey
+  if (token && providerConfig) {
+    headers[providerConfig.authHeader] = token
   }
-  if (isHuggingFace && hfToken) {
-    headers['X-HF-Token'] = hfToken
-  }
-
-  // Use unified endpoint with provider parameter
-  const endpoint = `${API_URL}/api/generate`
-
-  // Map legacy provider names to new format
-  const mappedProvider = isHuggingFace ? 'huggingface' : 'gitee'
-  const mappedModel = provider === 'hf-qwen' ? 'qwen' : model || 'z-image-turbo'
 
   const body: GenerateRequest = {
-    provider: mappedProvider,
-    model: mappedModel,
+    provider,
+    model: model || 'z-image-turbo',
     prompt,
     negativePrompt,
     width,
@@ -80,7 +66,7 @@ export async function generateImage(
   }
 
   try {
-    const response = await fetch(endpoint, {
+    const response = await fetch(`${API_URL}/api/generate`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -134,49 +120,6 @@ export async function upscaleImage(
     }
 
     return { success: true, data: data as UpscaleResponse }
-  } catch (err) {
-    return {
-      success: false,
-      error: err instanceof Error ? err.message : 'Network error',
-    }
-  }
-}
-
-/**
- * Legacy generate function for HuggingFace (backward compatibility)
- */
-export async function generateImageHF(
-  options: Omit<GenerateOptions, 'provider' | 'negativePrompt'> & { model?: string },
-  hfToken?: string
-): Promise<ApiResponse<GenerateSuccessResponse>> {
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-  }
-
-  if (hfToken) {
-    headers['X-HF-Token'] = hfToken
-  }
-
-  try {
-    const response = await fetch(`${API_URL}/api/generate-hf`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        prompt: options.prompt,
-        width: options.width,
-        height: options.height,
-        model: options.model,
-        seed: options.seed,
-      }),
-    })
-
-    const data = await response.json()
-
-    if (!response.ok) {
-      return { success: false, error: data.error || 'Failed to generate image' }
-    }
-
-    return { success: true, data: data as GenerateSuccessResponse }
   } catch (err) {
     return {
       success: false,

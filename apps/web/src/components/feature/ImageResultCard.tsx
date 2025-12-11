@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ImageIcon, Download, Info, Trash2, Eye, EyeOff, Loader2 } from 'lucide-react'
-import type { ApiProvider } from '@/lib/constants'
+import type { ProviderType } from '@/lib/constants'
 
 interface ImageResultCardProps {
   imageUrl: string | null
@@ -8,7 +8,7 @@ interface ImageResultCardProps {
   elapsed: number
   width: number
   height: number
-  apiProvider: ApiProvider
+  apiProvider: ProviderType
   showInfo: boolean
   isBlurred: boolean
   isUpscaled: boolean

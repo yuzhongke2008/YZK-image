@@ -1,8 +1,8 @@
 import { memo, useEffect, useState, useRef } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Sparkles, Download, Trash2, Eye, EyeOff } from 'lucide-react'
-import { decryptFromStore, decryptHfTokenFromStore } from '@/lib/crypto'
-import { loadSettings, type ApiProvider } from '@/lib/constants'
+import { loadAllTokens } from '@/lib/crypto'
+import { loadSettings, type ProviderType } from '@/lib/constants'
 
 import type { GeneratedImage } from '@/lib/flow-storage'
 
@@ -19,59 +19,32 @@ export type AIResultNodeData = {
   onDelete?: (id: string) => void
 }
 
-async function generateImage(
+async function generateImageApi(
   prompt: string,
   width: number,
   height: number,
-  provider: ApiProvider,
-  apiKey: string,
-  hfToken: string,
+  provider: ProviderType,
+  token: string,
+  model: string,
   seed?: number
 ): Promise<string> {
   const baseUrl = import.meta.env.VITE_API_URL || ''
+  const { PROVIDER_CONFIGS } = await import('@/lib/constants')
+  const providerConfig = PROVIDER_CONFIGS[provider]
 
-  if (provider === 'gitee') {
-    const res = await fetch(`${baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
-      },
-      body: JSON.stringify({
-        prompt,
-        negative_prompt: '',
-        model: 'z-image-turbo',
-        width,
-        height,
-        num_inference_steps: 9,
-      }),
-    })
-
-    const text = await res.text()
-    if (!text) throw new Error('Empty response from server')
-
-    let data
-    try {
-      data = JSON.parse(text)
-    } catch {
-      throw new Error(`Invalid response: ${text.slice(0, 100)}`)
-    }
-
-    if (!res.ok) throw new Error(data.error || 'Failed to generate')
-    return data.url || `data:image/png;base64,${data.b64_json}`
-  }
-
-  const res = await fetch(`${baseUrl}/api/generate-hf`, {
+  const res = await fetch(`${baseUrl}/api/generate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(hfToken && { 'X-HF-Token': hfToken }),
+      ...(token && { [providerConfig.authHeader]: token }),
     },
     body: JSON.stringify({
+      provider,
       prompt,
+      model,
       width,
       height,
-      model: provider === 'hf-qwen' ? 'qwen' : 'zimage',
+      steps: 9,
       ...(typeof seed === 'number' ? { seed } : {}),
     }),
   })
@@ -87,8 +60,7 @@ async function generateImage(
   }
 
   if (!res.ok) throw new Error(data.error || 'Failed to generate')
-  if (!data.url) throw new Error('No image returned')
-  return data.url
+  return data.url || `data:image/png;base64,${data.b64_json}`
 }
 
 function AIResultNode({ id, data }: NodeProps) {
@@ -131,18 +103,21 @@ function AIResultNode({ id, data }: NodeProps) {
     ;(async () => {
       startTimeRef.current = Date.now()
       const settings = loadSettings()
-      const provider = (settings.apiProvider as ApiProvider) ?? 'gitee'
+      const provider = (settings.provider as ProviderType) ?? 'huggingface'
+      const selectedModel = settings.model || 'z-image-turbo'
 
-      const [apiKey, hfToken] = await Promise.all([decryptFromStore(), decryptHfTokenFromStore()])
+      const tokens = await loadAllTokens()
+      const token = tokens[provider]
 
-      if (provider === 'gitee' && !apiKey) {
-        setError('No API Key')
+      const { PROVIDER_CONFIGS } = await import('@/lib/constants')
+      if (PROVIDER_CONFIGS[provider].requiresAuth && !token) {
+        setError('No API Token')
         setLoading(false)
         return
       }
 
       try {
-        const url = await generateImage(prompt, width, height, provider, apiKey, hfToken, seed)
+        const url = await generateImageApi(prompt, width, height, provider, token, selectedModel, seed)
         setImageUrl(url)
         setLoading(false)
         const duration = (Date.now() - startTimeRef.current) / 1000

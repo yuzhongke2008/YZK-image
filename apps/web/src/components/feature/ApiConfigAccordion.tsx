@@ -14,29 +14,31 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { ApiProvider } from '@/lib/constants'
+import { PROVIDER_CONFIGS, PROVIDER_OPTIONS, type ProviderType } from '@/lib/constants'
+import type { ModelConfig } from '@z-image/shared'
 
 interface ApiConfigAccordionProps {
-  apiKey: string
-  hfToken: string
-  apiProvider: ApiProvider
-  setApiKey: (key: string) => void
-  setHfToken: (token: string) => void
-  setApiProvider: (provider: ApiProvider) => void
-  saveApiKey: (key: string) => void
-  saveHfToken: (token: string) => void
+  provider: ProviderType
+  model: string
+  currentToken: string
+  availableModels: ModelConfig[]
+  setProvider: (provider: ProviderType) => void
+  setModel: (model: string) => void
+  saveToken: (provider: ProviderType, token: string) => void
 }
 
 export function ApiConfigAccordion({
-  apiKey,
-  hfToken,
-  apiProvider,
-  setApiKey,
-  setHfToken,
-  setApiProvider,
-  saveApiKey,
-  saveHfToken,
+  provider,
+  model,
+  currentToken,
+  availableModels,
+  setProvider,
+  setModel,
+  saveToken,
 }: ApiConfigAccordionProps) {
+  const providerConfig = PROVIDER_CONFIGS[provider]
+  const isConfigured = !providerConfig.requiresAuth || currentToken
+
   return (
     <Accordion
       type="single"
@@ -48,49 +50,67 @@ export function ApiConfigAccordion({
           <div className="flex items-center gap-2">
             <Settings className="w-4 h-4" />
             <span>API Configuration</span>
-            {apiKey && <span className="text-xs text-green-500">● Configured</span>}
+            {isConfigured && <span className="text-xs text-green-500">● Ready</span>}
           </div>
         </AccordionTrigger>
         <AccordionContent>
           <div className="space-y-3 pb-2">
+            {/* Provider Selection */}
             <div>
-              <Label className="text-zinc-400 text-xs">API Provider</Label>
-              <Select value={apiProvider} onValueChange={(v) => setApiProvider(v as ApiProvider)}>
+              <Label className="text-zinc-400 text-xs">Provider</Label>
+              <Select value={provider} onValueChange={(v) => setProvider(v as ProviderType)}>
                 <SelectTrigger className="mt-1 bg-zinc-950 border-zinc-800 text-zinc-100">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-zinc-900/70 backdrop-blur-md border-zinc-700 text-white">
-                  <SelectItem value="gitee">Gitee AI</SelectItem>
-                  <SelectItem value="hf-zimage">HF Z-Image Turbo</SelectItem>
-                  <SelectItem value="hf-qwen">HF Qwen Image</SelectItem>
+                  {PROVIDER_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                      {!opt.requiresAuth && (
+                        <span className="ml-2 text-xs text-green-500">(Free)</span>
+                      )}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
-            {apiProvider === 'gitee' ? (
-              <div>
-                <Label className="text-zinc-400 text-xs">Gitee API Key</Label>
-                <Input
-                  type="password"
-                  placeholder="Enter your Gitee AI API Key..."
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  onBlur={(e) => saveApiKey(e.target.value)}
-                  className="mt-1 bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600"
-                />
-              </div>
-            ) : (
-              <div>
-                <Label className="text-zinc-400 text-xs">HF Token (Optional)</Label>
-                <Input
-                  type="password"
-                  placeholder="For extra quota..."
-                  value={hfToken}
-                  onChange={(e) => setHfToken(e.target.value)}
-                  onBlur={(e) => saveHfToken(e.target.value)}
-                  className="mt-1 bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600"
-                />
-              </div>
-            )}
+
+            {/* Model Selection */}
+            <div>
+              <Label className="text-zinc-400 text-xs">Model</Label>
+              <Select value={model} onValueChange={setModel}>
+                <SelectTrigger className="mt-1 bg-zinc-950 border-zinc-800 text-zinc-100">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900/70 backdrop-blur-md border-zinc-700 text-white">
+                  {availableModels.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Token Input */}
+            <div>
+              <Label className="text-zinc-400 text-xs">
+                {providerConfig.name} Token
+                {!providerConfig.requiresAuth && ' (Optional)'}
+              </Label>
+              <Input
+                type="password"
+                placeholder={
+                  providerConfig.requiresAuth
+                    ? `Enter your ${providerConfig.name} API token...`
+                    : 'Optional: for extra quota...'
+                }
+                value={currentToken}
+                onChange={(e) => saveToken(provider, e.target.value)}
+                onBlur={(e) => saveToken(provider, e.target.value)}
+                className="mt-1 bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600"
+              />
+            </div>
           </div>
         </AccordionContent>
       </AccordionItem>

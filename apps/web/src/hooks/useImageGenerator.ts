@@ -7,32 +7,33 @@
 import { generateImage, upscaleImage } from '@/lib/api'
 import {
   ASPECT_RATIOS,
-  type ApiProvider,
   DEFAULT_NEGATIVE_PROMPT,
   DEFAULT_PROMPT,
+  PROVIDER_CONFIGS,
+  type ProviderType,
+  getDefaultModel,
+  getModelsByProvider,
   loadSettings,
   saveSettings,
 } from '@/lib/constants'
-import {
-  decryptFromStore,
-  decryptHfTokenFromStore,
-  encryptAndStore,
-  encryptAndStoreHfToken,
-} from '@/lib/crypto'
+import { encryptAndStoreToken, loadAllTokens } from '@/lib/crypto'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 export function useImageGenerator() {
-  const [apiKey, setApiKey] = useState('')
-  const [hfToken, setHfToken] = useState('')
-  const [apiProvider, setApiProvider] = useState<ApiProvider>(
-    () => loadSettings().apiProvider ?? 'gitee'
+  const [tokens, setTokens] = useState<Record<ProviderType, string>>({
+    gitee: '',
+    huggingface: '',
+    modelscope: '',
+  })
+  const [provider, setProvider] = useState<ProviderType>(
+    () => loadSettings().provider ?? 'huggingface'
   )
+  const [model, setModel] = useState(() => loadSettings().model ?? 'z-image-turbo')
   const [prompt, setPrompt] = useState(() => loadSettings().prompt ?? DEFAULT_PROMPT)
   const [negativePrompt, setNegativePrompt] = useState(
     () => loadSettings().negativePrompt ?? DEFAULT_NEGATIVE_PROMPT
   )
-  const [model] = useState('z-image-turbo')
   const [width, setWidth] = useState(() => loadSettings().width ?? 1024)
   const [height, setHeight] = useState(() => loadSettings().height ?? 1024)
   const [steps, setSteps] = useState(() => loadSettings().steps ?? 9)
@@ -51,13 +52,26 @@ export function useImageGenerator() {
   const [isUpscaling, setIsUpscaling] = useState(false)
   const initialized = useRef(false)
 
+  // Get current token for selected provider
+  const currentToken = tokens[provider]
+
+  // Get models for current provider
+  const availableModels = getModelsByProvider(provider)
+
   useEffect(() => {
     if (!initialized.current) {
       initialized.current = true
-      decryptFromStore().then(setApiKey)
-      decryptHfTokenFromStore().then(setHfToken)
+      loadAllTokens().then(setTokens)
     }
   }, [])
+
+  // Update model when provider changes
+  useEffect(() => {
+    const models = getModelsByProvider(provider)
+    if (!models.find((m) => m.id === model)) {
+      setModel(getDefaultModel(provider))
+    }
+  }, [provider, model])
 
   useEffect(() => {
     if (initialized.current) {
@@ -70,10 +84,11 @@ export function useImageGenerator() {
         selectedRatio,
         uhd,
         upscale8k,
-        apiProvider,
+        provider,
+        model,
       })
     }
-  }, [prompt, negativePrompt, width, height, steps, selectedRatio, uhd, upscale8k, apiProvider])
+  }, [prompt, negativePrompt, width, height, steps, selectedRatio, uhd, upscale8k, provider, model])
 
   useEffect(() => {
     if (imageUrl) {
@@ -94,18 +109,10 @@ export function useImageGenerator() {
     return () => clearInterval(timer)
   }, [loading])
 
-  const saveApiKey = (key: string) => {
-    setApiKey(key)
-    encryptAndStore(key)
-    if (key) toast.success('API Key saved')
-  }
-
-  const saveHfToken = async (token: string) => {
-    setHfToken(token)
-    await encryptAndStoreHfToken(token)
-    if (token) {
-      toast.success('HF Token saved')
-    }
+  const saveToken = async (p: ProviderType, token: string) => {
+    setTokens((prev) => ({ ...prev, [p]: token }))
+    await encryptAndStoreToken(p, token)
+    if (token) toast.success(`${PROVIDER_CONFIGS[p].name} token saved`)
   }
 
   const addStatus = (msg: string) => {
@@ -142,7 +149,7 @@ export function useImageGenerator() {
     setIsUpscaling(true)
     addStatus('Upscaling to 4x...')
 
-    const result = await upscaleImage(imageUrl, 4, hfToken || undefined)
+    const result = await upscaleImage(imageUrl, 4, tokens.huggingface || undefined)
 
     if (result.success && result.data.url) {
       setImageUrl(result.data.url)
@@ -166,8 +173,9 @@ export function useImageGenerator() {
   }
 
   const handleGenerate = async () => {
-    if (apiProvider === 'gitee' && !apiKey) {
-      toast.error('Please configure your API Key first')
+    const providerConfig = PROVIDER_CONFIGS[provider]
+    if (providerConfig.requiresAuth && !currentToken) {
+      toast.error(`Please configure your ${providerConfig.name} token first`)
       return
     }
 
@@ -179,13 +187,11 @@ export function useImageGenerator() {
     setStatus('Initializing...')
 
     try {
-      const providerName =
-        apiProvider === 'gitee' ? 'Gitee AI' : apiProvider === 'hf-qwen' ? 'HF Qwen' : 'HF Z-Image'
-      addStatus(`Sending request to ${providerName}...`)
+      addStatus(`Sending request to ${providerConfig.name}...`)
 
       const result = await generateImage(
         {
-          provider: apiProvider,
+          provider,
           prompt,
           negativePrompt,
           width,
@@ -193,10 +199,7 @@ export function useImageGenerator() {
           steps,
           model,
         },
-        {
-          apiKey: apiProvider === 'gitee' ? apiKey : undefined,
-          hfToken: apiProvider !== 'gitee' ? hfToken || undefined : undefined,
-        }
+        { token: currentToken || undefined }
       )
 
       if (!result.success) {
@@ -213,7 +216,7 @@ export function useImageGenerator() {
       // Auto upscale to 8K if enabled
       if (upscale8k && generatedUrl.startsWith('http')) {
         addStatus('Upscaling to 8K...')
-        const upResult = await upscaleImage(generatedUrl, 4, hfToken || undefined)
+        const upResult = await upscaleImage(generatedUrl, 4, tokens.huggingface || undefined)
 
         if (upResult.success && upResult.data.url) {
           generatedUrl = upResult.data.url
@@ -237,9 +240,11 @@ export function useImageGenerator() {
 
   return {
     // State
-    apiKey,
-    hfToken,
-    apiProvider,
+    tokens,
+    currentToken,
+    provider,
+    model,
+    availableModels,
     prompt,
     negativePrompt,
     width,
@@ -256,9 +261,8 @@ export function useImageGenerator() {
     isUpscaled,
     isUpscaling,
     // Setters
-    setApiKey,
-    setHfToken,
-    setApiProvider,
+    setProvider,
+    setModel,
     setPrompt,
     setNegativePrompt,
     setWidth,
@@ -267,8 +271,7 @@ export function useImageGenerator() {
     setShowInfo,
     setIsBlurred,
     // Handlers
-    saveApiKey,
-    saveHfToken,
+    saveToken,
     handleRatioSelect,
     handleUhdToggle,
     handleDownload,

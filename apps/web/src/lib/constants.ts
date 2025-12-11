@@ -7,15 +7,17 @@
 
 import {
   type AspectRatioConfig,
+  MODEL_CONFIGS,
   PROVIDER_CONFIGS,
   type ProviderType,
   ASPECT_RATIOS as SHARED_ASPECT_RATIOS,
+  getModelsByProvider,
 } from '@z-image/shared'
 import { RectangleHorizontal, RectangleVertical, Square } from 'lucide-react'
 
 // Re-export shared types
 export type { ProviderType, AspectRatioConfig }
-export { PROVIDER_CONFIGS }
+export { PROVIDER_CONFIGS, MODEL_CONFIGS, getModelsByProvider }
 
 // Environment defaults
 export const DEFAULT_PROMPT = import.meta.env.VITE_DEFAULT_PROMPT
@@ -41,9 +43,6 @@ export const ASPECT_RATIOS: AspectRatioWithIcon[] = SHARED_ASPECT_RATIOS.map((ra
 
 export type AspectRatio = (typeof ASPECT_RATIOS)[number]
 
-// Legacy type alias for backward compatibility
-export type ApiProvider = ProviderType | 'hf-zimage' | 'hf-qwen'
-
 // Storage
 export const STORAGE_KEY = 'zenith-settings'
 
@@ -61,8 +60,14 @@ export function saveSettings(settings: Record<string, unknown>) {
 }
 
 // Provider options for UI
-export const PROVIDER_OPTIONS = [
+export const PROVIDER_OPTIONS: { value: ProviderType; label: string; requiresAuth: boolean }[] = [
+  { value: 'huggingface', label: 'HuggingFace', requiresAuth: false },
   { value: 'gitee', label: 'Gitee AI', requiresAuth: true },
-  { value: 'hf-zimage', label: 'HF Z-Image', requiresAuth: false },
-  { value: 'hf-qwen', label: 'HF Qwen', requiresAuth: false },
-] as const
+  { value: 'modelscope', label: 'ModelScope', requiresAuth: true },
+]
+
+// Get default model for provider
+export function getDefaultModel(provider: ProviderType): string {
+  const models = getModelsByProvider(provider)
+  return models[0]?.id || 'z-image-turbo'
+}

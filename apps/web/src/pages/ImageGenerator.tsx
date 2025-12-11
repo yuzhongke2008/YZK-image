@@ -7,9 +7,10 @@ import { StatusCard } from '@/components/feature/StatusCard'
 
 export default function ImageGenerator() {
   const {
-    apiKey,
-    hfToken,
-    apiProvider,
+    currentToken,
+    provider,
+    model,
+    availableModels,
     prompt,
     negativePrompt,
     width,
@@ -25,9 +26,8 @@ export default function ImageGenerator() {
     isBlurred,
     isUpscaled,
     isUpscaling,
-    setApiKey,
-    setHfToken,
-    setApiProvider,
+    setProvider,
+    setModel,
     setPrompt,
     setNegativePrompt,
     setWidth,
@@ -35,8 +35,7 @@ export default function ImageGenerator() {
     setSteps,
     setShowInfo,
     setIsBlurred,
-    saveApiKey,
-    saveHfToken,
+    saveToken,
     handleRatioSelect,
     handleUhdToggle,
     handleDownload,
@@ -55,14 +54,13 @@ export default function ImageGenerator() {
             {/* Left Panel - Controls */}
             <div className="lg:col-span-3 space-y-4">
               <ApiConfigAccordion
-                apiKey={apiKey}
-                hfToken={hfToken}
-                apiProvider={apiProvider}
-                setApiKey={setApiKey}
-                setHfToken={setHfToken}
-                setApiProvider={setApiProvider}
-                saveApiKey={saveApiKey}
-                saveHfToken={saveHfToken}
+                provider={provider}
+                model={model}
+                currentToken={currentToken}
+                availableModels={availableModels}
+                setProvider={setProvider}
+                setModel={setModel}
+                saveToken={saveToken}
               />
 
               <PromptCard
@@ -93,7 +91,7 @@ export default function ImageGenerator() {
                 elapsed={elapsed}
                 width={width}
                 height={height}
-                apiProvider={apiProvider}
+                apiProvider={provider}
                 showInfo={showInfo}
                 isBlurred={isBlurred}
                 isUpscaled={isUpscaled}

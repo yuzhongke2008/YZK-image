@@ -16,19 +16,20 @@ import {
 import '@xyflow/react/dist/style.css'
 import { ArrowLeft, Settings, X, Download, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import {
-  encryptAndStore,
-  decryptFromStore,
-  encryptAndStoreHfToken,
-  decryptHfTokenFromStore,
-} from '@/lib/crypto'
+import { encryptAndStoreToken, loadAllTokens } from '@/lib/crypto'
 import {
   loadFlowState,
   saveFlowState,
   clearFlowState,
   type GeneratedImage,
 } from '@/lib/flow-storage'
-import { loadSettings, saveSettings, type ApiProvider } from '@/lib/constants'
+import {
+  loadSettings,
+  saveSettings,
+  type ProviderType,
+  getModelsByProvider,
+  getDefaultModel,
+} from '@/lib/constants'
 import UserPromptNode, { type UserPromptNodeData } from '@/components/flow/UserPromptNode'
 import AIResultNode, { type AIResultNodeData } from '@/components/flow/AIResultNode'
 import { getLayoutedElements } from '@/components/flow/layout'
@@ -43,11 +44,15 @@ const nodeTypes = {
 function FlowCanvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
-  const [apiKey, setApiKey] = useState('')
-  const [hfToken, setHfToken] = useState('')
-  const [apiProvider, setApiProvider] = useState<ApiProvider>(
-    () => loadSettings().apiProvider ?? 'gitee'
+  const [tokens, setTokens] = useState<Record<ProviderType, string>>({
+    gitee: '',
+    huggingface: '',
+    modelscope: '',
+  })
+  const [provider, setProvider] = useState<ProviderType>(
+    () => loadSettings().provider ?? 'huggingface'
   )
+  const [model, setModel] = useState(() => loadSettings().model ?? 'z-image-turbo')
   const [showSettings, setShowSettings] = useState(false)
   const [isLoaded, setIsLoaded] = useState(false)
   const nodeIdRef = useRef(0)
@@ -136,18 +141,20 @@ function FlowCanvas() {
   }, [setNodes, setEdges, setViewport, fitView, handleImageGenerated])
 
   useEffect(() => {
-    decryptFromStore().then((key) => setApiKey(key || ''))
-    decryptHfTokenFromStore().then((token) => setHfToken(token || ''))
+    loadAllTokens().then(setTokens)
   }, [])
 
-  const saveApiKey = async (key: string) => {
-    await encryptAndStore(key)
-    setApiKey(key)
-  }
+  // Update model when provider changes
+  useEffect(() => {
+    const models = getModelsByProvider(provider)
+    if (!models.find((m) => m.id === model)) {
+      setModel(getDefaultModel(provider))
+    }
+  }, [provider, model])
 
-  const saveHfToken = async (token: string) => {
-    setHfToken(token)
-    await encryptAndStoreHfToken(token)
+  const saveToken = async (p: ProviderType, token: string) => {
+    setTokens((prev) => ({ ...prev, [p]: token }))
+    await encryptAndStoreToken(p, token)
   }
 
   const updateSettings = (patch: Partial<Record<string, unknown>>) => {
@@ -232,12 +239,7 @@ function FlowCanvas() {
             width: config.width,
             height: config.height,
             aspectRatio,
-            model:
-              apiProvider === 'gitee'
-                ? 'Gitee AI'
-                : apiProvider === 'hf-qwen'
-                  ? 'HF Qwen Image'
-                  : 'HF Z-Image Turbo',
+            model,
             seed: config.seed + i,
             onImageGenerated: handleImageGenerated,
           } as AIResultNodeData,
@@ -261,7 +263,7 @@ function FlowCanvas() {
       setEdges(layoutedEdges)
       setTimeout(() => fitView({ padding: 0.2, duration: 500 }), 100)
     },
-    [nodes, edges, setNodes, setEdges, fitView, handleImageGenerated, apiProvider]
+    [nodes, edges, setNodes, setEdges, fitView, handleImageGenerated, provider]
   )
 
   return (
@@ -319,7 +321,7 @@ function FlowCanvas() {
           >
             <Settings className="w-4 h-4" />
             <span className="text-sm">API</span>
-            {(apiKey || hfToken) && <span className="w-2 h-2 bg-green-500 rounded-full" />}
+            {tokens[provider] && <span className="w-2 h-2 bg-green-500 rounded-full" />}
           </button>
         </div>
       </div>
@@ -337,17 +339,19 @@ function FlowCanvas() {
               </button>
             </div>
             <ApiConfigAccordion
-              apiKey={apiKey}
-              hfToken={hfToken}
-              apiProvider={apiProvider}
-              setApiKey={setApiKey}
-              setHfToken={setHfToken}
-              setApiProvider={(provider) => {
-                setApiProvider(provider)
-                updateSettings({ apiProvider: provider })
+              provider={provider}
+              model={model}
+              currentToken={tokens[provider]}
+              availableModels={getModelsByProvider(provider)}
+              setProvider={(p) => {
+                setProvider(p)
+                updateSettings({ provider: p })
               }}
-              saveApiKey={saveApiKey}
-              saveHfToken={saveHfToken}
+              setModel={(m) => {
+                setModel(m)
+                updateSettings({ model: m })
+              }}
+              saveToken={saveToken}
             />
           </div>
         </div>
@@ -355,13 +359,7 @@ function FlowCanvas() {
 
       <FloatingInput
         onSubmit={addNode}
-        providerLabel={
-          apiProvider === 'gitee'
-            ? 'Gitee AI'
-            : apiProvider === 'hf-qwen'
-              ? 'HF Qwen Image'
-              : 'HF Z-Image Turbo'
-        }
+        providerLabel={`${provider} / ${model}`}
       />
     </div>
   )
