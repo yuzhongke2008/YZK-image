@@ -25,7 +25,8 @@ import {
   saveLLMSettings,
   saveSettings,
 } from '@/lib/constants'
-import { decryptTokenFromStore, encryptAndStoreToken, loadAllTokens } from '@/lib/crypto'
+import { encryptAndStoreToken, loadAllTokens, loadTokensArray } from '@/lib/crypto'
+import { parseTokens } from '@/lib/tokenRotation'
 
 const IMAGE_DETAILS_KEY = 'lastImageDetails'
 
@@ -162,7 +163,9 @@ export function useImageGenerator() {
     setIsUpscaling(true)
     addStatus('Upscaling to 4x...')
 
-    const result = await upscaleImage(imageDetails.url, 4, tokens.huggingface || undefined)
+    // Get HuggingFace tokens array for rotation
+    const hfTokens = parseTokens(tokens.huggingface)
+    const result = await upscaleImage(imageDetails.url, 4, hfTokens.length > 0 ? hfTokens : undefined)
 
     if (result.success && result.data.url) {
       setImageDetails((prev) => (prev ? { ...prev, url: result.data.url as string } : null))
@@ -187,7 +190,9 @@ export function useImageGenerator() {
 
   const handleGenerate = async () => {
     const providerConfig = PROVIDER_CONFIGS[provider]
-    if (providerConfig.requiresAuth && !currentToken) {
+    const providerTokens = parseTokens(currentToken)
+
+    if (providerConfig.requiresAuth && providerTokens.length === 0) {
       toast.error(`Please configure your ${providerConfig.name} token first`)
       return
     }
@@ -212,7 +217,7 @@ export function useImageGenerator() {
           steps,
           model,
         },
-        { token: currentToken || undefined }
+        { tokens: providerTokens.length > 0 ? providerTokens : undefined }
       )
 
       if (!result.success) {
@@ -226,7 +231,8 @@ export function useImageGenerator() {
       // Auto upscale to 8K if enabled
       if (upscale8k && details.url.startsWith('http')) {
         addStatus('Upscaling to 8K...')
-        const upResult = await upscaleImage(details.url, 4, tokens.huggingface || undefined)
+        const hfTokens = parseTokens(tokens.huggingface)
+        const upResult = await upscaleImage(details.url, 4, hfTokens.length > 0 ? hfTokens : undefined)
 
         if (upResult.success && upResult.data.url) {
           details.url = upResult.data.url
@@ -288,20 +294,20 @@ export function useImageGenerator() {
     [updateLLMSettings]
   )
 
-  // Get token for LLM provider (maps llm provider to token provider)
-  const getLLMToken = useCallback(async (): Promise<string | undefined> => {
+  // Get tokens for LLM provider (maps llm provider to token provider)
+  const getLLMTokens = useCallback(async (): Promise<string[]> => {
     const { llmProvider } = llmSettings
     switch (llmProvider) {
       case 'gitee-llm':
-        return decryptTokenFromStore('gitee')
+        return loadTokensArray('gitee')
       case 'modelscope-llm':
-        return decryptTokenFromStore('modelscope')
+        return loadTokensArray('modelscope')
       case 'huggingface-llm':
-        return decryptTokenFromStore('huggingface')
+        return loadTokensArray('huggingface')
       case 'deepseek':
-        return decryptTokenFromStore('deepseek')
+        return loadTokensArray('deepseek')
       default:
-        return undefined
+        return []
     }
   }, [llmSettings])
 
@@ -313,7 +319,7 @@ export function useImageGenerator() {
     addStatus('Optimizing prompt...')
 
     try {
-      const token = await getLLMToken()
+      const tokens = await getLLMTokens()
       const result = await optimizePrompt(
         {
           prompt,
@@ -322,7 +328,7 @@ export function useImageGenerator() {
           lang: 'en',
           systemPrompt: getEffectiveSystemPrompt(llmSettings.customSystemPrompt),
         },
-        token
+        tokens.length > 0 ? tokens : undefined
       )
 
       if (result.success) {
@@ -340,7 +346,7 @@ export function useImageGenerator() {
     } finally {
       setIsOptimizing(false)
     }
-  }, [prompt, isOptimizing, llmSettings, getLLMToken, addStatus])
+  }, [prompt, isOptimizing, llmSettings, getLLMTokens, addStatus])
 
   // Translate prompt handler
   const handleTranslate = useCallback(async () => {

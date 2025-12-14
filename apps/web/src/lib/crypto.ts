@@ -87,3 +87,31 @@ export async function loadAllTokens(): Promise<Record<TokenProvider, string>> {
   }
   return tokens
 }
+
+/**
+ * Load all tokens for a provider as an array (supports comma-separated tokens)
+ */
+export async function loadTokensArray(provider: TokenProvider): Promise<string[]> {
+  const rawToken = await decryptTokenFromStore(provider)
+  if (!rawToken) return []
+  return rawToken
+    .split(',')
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+}
+
+/**
+ * Load all tokens for all providers as arrays
+ */
+export async function loadAllTokensArrays(): Promise<Record<TokenProvider, string[]>> {
+  const tokens: Record<TokenProvider, string[]> = {
+    gitee: [],
+    huggingface: [],
+    modelscope: [],
+    deepseek: [],
+  }
+  for (const provider of Object.keys(TOKEN_STORAGE_KEYS) as TokenProvider[]) {
+    tokens[provider] = await loadTokensArray(provider)
+  }
+  return tokens
+}
