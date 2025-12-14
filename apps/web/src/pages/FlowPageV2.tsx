@@ -12,21 +12,30 @@ import { ArrowLeft, Download, Loader2, Settings, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
 import { ApiConfigAccordion } from '@/components/feature/ApiConfigAccordion'
+import { LLMSettingsAccordion } from '@/components/feature/LLMSettingsAccordion'
 import { ConfigNode } from '@/components/flow/ConfigNode'
 import { FlowInput } from '@/components/flow/FlowInput'
 import { ImageNode } from '@/components/flow/ImageNode'
 import { Lightbox } from '@/components/flow/Lightbox'
 import { StorageLimitModal } from '@/components/flow/StorageLimitModal'
 import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher'
+import { optimizePrompt, translatePrompt } from '@/lib/api'
 import {
+  getDefaultLLMModel,
   getDefaultModel,
+  getEffectiveSystemPrompt,
   getModelsByProvider,
+  loadLLMSettings,
   loadSettings,
+  type LLMProviderType,
+  type LLMSettings,
   type ProviderType,
+  saveLLMSettings,
   saveSettings,
 } from '@/lib/constants'
-import { encryptAndStoreToken, loadAllTokens } from '@/lib/crypto'
+import { decryptTokenFromStore, encryptAndStoreToken, loadAllTokens } from '@/lib/crypto'
 import { blobToDataUrl, cleanupForNewBlob, getBlob, storeBlob } from '@/lib/imageBlobStore'
 import { downloadImagesAsZip } from '@/lib/utils'
 import { LAYOUT, useFlowStore } from '@/stores/flowStore'
@@ -99,6 +108,11 @@ function FlowCanvas() {
   )
   const [model, setModel] = useState(() => loadSettings().model ?? 'z-image-turbo')
   const [showSettings, setShowSettings] = useState(false)
+  const [isOptimizing, setIsOptimizing] = useState(false)
+  const [isTranslating, setIsTranslating] = useState(false)
+
+  // LLM Settings state
+  const [llmSettings, setLLMSettings] = useState<LLMSettings>(loadLLMSettings)
 
   // Load tokens
   useEffect(() => {
@@ -122,6 +136,118 @@ function FlowCanvas() {
     const prev = loadSettings()
     saveSettings({ ...prev, ...patch })
   }
+
+  // LLM Settings handlers
+  const updateLLMSettings = useCallback((updates: Partial<LLMSettings>) => {
+    setLLMSettings((prev) => {
+      const newSettings = { ...prev, ...updates }
+      saveLLMSettings(newSettings)
+      return newSettings
+    })
+  }, [])
+
+  const setLLMProvider = useCallback(
+    (provider: LLMProviderType) => {
+      updateLLMSettings({
+        llmProvider: provider,
+        llmModel: getDefaultLLMModel(provider),
+      })
+    },
+    [updateLLMSettings]
+  )
+
+  const setLLMModel = useCallback(
+    (model: string) => {
+      updateLLMSettings({ llmModel: model })
+    },
+    [updateLLMSettings]
+  )
+
+  const setAutoTranslate = useCallback(
+    (enabled: boolean) => {
+      updateLLMSettings({ autoTranslate: enabled })
+    },
+    [updateLLMSettings]
+  )
+
+  const setCustomSystemPrompt = useCallback(
+    (prompt: string) => {
+      updateLLMSettings({ customSystemPrompt: prompt })
+    },
+    [updateLLMSettings]
+  )
+
+  // Optimize prompt handler
+  const handleOptimize = useCallback(async (prompt: string): Promise<string | null> => {
+    if (!prompt.trim() || isOptimizing) return null
+
+    setIsOptimizing(true)
+    try {
+      // Get token for LLM provider
+      let token: string | undefined
+      switch (llmSettings.llmProvider) {
+        case 'gitee-llm':
+          token = await decryptTokenFromStore('gitee')
+          break
+        case 'modelscope-llm':
+          token = await decryptTokenFromStore('modelscope')
+          break
+        case 'huggingface-llm':
+          token = await decryptTokenFromStore('huggingface')
+          break
+        case 'deepseek':
+          token = await decryptTokenFromStore('deepseek')
+          break
+      }
+
+      const result = await optimizePrompt(
+        {
+          prompt,
+          provider: llmSettings.llmProvider,
+          model: llmSettings.llmModel,
+          lang: 'en',
+          systemPrompt: getEffectiveSystemPrompt(llmSettings.customSystemPrompt),
+        },
+        token
+      )
+
+      if (result.success) {
+        toast.success(t('prompt.optimizeSuccess'))
+        return result.data.optimized
+      }
+      toast.error(result.error)
+      return null
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Optimization failed'
+      toast.error(msg)
+      return null
+    } finally {
+      setIsOptimizing(false)
+    }
+  }, [isOptimizing, t, llmSettings])
+
+  // Translate prompt handler
+  const handleTranslate = useCallback(async (prompt: string): Promise<string | null> => {
+    if (!prompt.trim() || isTranslating) return null
+
+    setIsTranslating(true)
+    try {
+      const result = await translatePrompt(prompt)
+
+      if (result.success) {
+        toast.success(t('prompt.translateSuccess'))
+        return result.data.translated
+      }
+      toast.error(result.error)
+      return null
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Translation failed'
+      toast.error(msg)
+      return null
+    } finally {
+      setIsTranslating(false)
+    }
+  }, [isTranslating, t])
 
   // Handle node drag - group dragging for config nodes (real-time)
   const onNodeDrag = useCallback(
@@ -345,7 +471,7 @@ function FlowCanvas() {
       {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md mx-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md mx-4 max-h-[80vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-zinc-100 font-medium">{t('apiConfig.settings')}</h2>
               <button
@@ -356,27 +482,43 @@ function FlowCanvas() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <ApiConfigAccordion
-              provider={provider}
-              model={model}
-              currentToken={tokens[provider]}
-              availableModels={getModelsByProvider(provider)}
-              setProvider={(p) => {
-                setProvider(p)
-                updateSettings({ provider: p })
-              }}
-              setModel={(m) => {
-                setModel(m)
-                updateSettings({ model: m })
-              }}
-              saveToken={saveToken}
-            />
+            <div className="space-y-4">
+              <ApiConfigAccordion
+                provider={provider}
+                model={model}
+                currentToken={tokens[provider]}
+                availableModels={getModelsByProvider(provider)}
+                setProvider={(p) => {
+                  setProvider(p)
+                  updateSettings({ provider: p })
+                }}
+                setModel={(m) => {
+                  setModel(m)
+                  updateSettings({ model: m })
+                }}
+                saveToken={saveToken}
+              />
+
+              <LLMSettingsAccordion
+                llmSettings={llmSettings}
+                setLLMProvider={setLLMProvider}
+                setLLMModel={setLLMModel}
+                setAutoTranslate={setAutoTranslate}
+                setCustomSystemPrompt={setCustomSystemPrompt}
+              />
+            </div>
           </div>
         </div>
       )}
 
       {/* Flow Input */}
-      <FlowInput providerLabel={`${provider} / ${model}`} />
+      <FlowInput
+        providerLabel={`${provider} / ${model}`}
+        onOptimize={handleOptimize}
+        onTranslate={handleTranslate}
+        isOptimizing={isOptimizing}
+        isTranslating={isTranslating}
+      />
 
       {/* Lightbox */}
       <Lightbox />

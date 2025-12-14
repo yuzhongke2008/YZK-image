@@ -5,21 +5,27 @@
  */
 
 import type { ImageDetails } from '@z-image/shared'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { generateImage, upscaleImage } from '@/lib/api'
+import { generateImage, optimizePrompt, translatePrompt, upscaleImage } from '@/lib/api'
 import {
   ASPECT_RATIOS,
   DEFAULT_NEGATIVE_PROMPT,
   DEFAULT_PROMPT,
+  getDefaultLLMModel,
   getDefaultModel,
+  getEffectiveSystemPrompt,
   getModelsByProvider,
+  loadLLMSettings,
   loadSettings,
+  type LLMProviderType,
+  type LLMSettings,
   PROVIDER_CONFIGS,
   type ProviderType,
+  saveLLMSettings,
   saveSettings,
 } from '@/lib/constants'
-import { encryptAndStoreToken, loadAllTokens } from '@/lib/crypto'
+import { decryptTokenFromStore, encryptAndStoreToken, loadAllTokens } from '@/lib/crypto'
 
 const IMAGE_DETAILS_KEY = 'lastImageDetails'
 
@@ -55,6 +61,11 @@ export function useImageGenerator() {
   const [isUpscaled, setIsUpscaled] = useState(false)
   const [isUpscaling, setIsUpscaling] = useState(false)
   const initialized = useRef(false)
+
+  // LLM Settings for prompt optimization
+  const [llmSettings, setLLMSettings] = useState<LLMSettings>(loadLLMSettings)
+  const [isOptimizing, setIsOptimizing] = useState(false)
+  const [isTranslating, setIsTranslating] = useState(false)
 
   // Get current token for selected provider
   const currentToken = tokens[provider]
@@ -119,9 +130,9 @@ export function useImageGenerator() {
     if (token) toast.success(`${PROVIDER_CONFIGS[p].name} token saved`)
   }
 
-  const addStatus = (msg: string) => {
+  const addStatus = useCallback((msg: string) => {
     setStatus((prev) => `${prev}\n${msg}`)
-  }
+  }, [])
 
   const handleRatioSelect = (ratio: (typeof ASPECT_RATIOS)[number]) => {
     setSelectedRatio(ratio.label)
@@ -237,6 +248,127 @@ export function useImageGenerator() {
     }
   }
 
+  // LLM Settings handlers
+  const updateLLMSettings = useCallback((updates: Partial<LLMSettings>) => {
+    setLLMSettings((prev) => {
+      const newSettings = { ...prev, ...updates }
+      saveLLMSettings(newSettings)
+      return newSettings
+    })
+  }, [])
+
+  const setLLMProvider = useCallback(
+    (provider: LLMProviderType) => {
+      updateLLMSettings({
+        llmProvider: provider,
+        llmModel: getDefaultLLMModel(provider),
+      })
+    },
+    [updateLLMSettings]
+  )
+
+  const setLLMModel = useCallback(
+    (model: string) => {
+      updateLLMSettings({ llmModel: model })
+    },
+    [updateLLMSettings]
+  )
+
+  const setAutoTranslate = useCallback(
+    (enabled: boolean) => {
+      updateLLMSettings({ autoTranslate: enabled })
+    },
+    [updateLLMSettings]
+  )
+
+  const setCustomSystemPrompt = useCallback(
+    (prompt: string) => {
+      updateLLMSettings({ customSystemPrompt: prompt })
+    },
+    [updateLLMSettings]
+  )
+
+  // Get token for LLM provider (maps llm provider to token provider)
+  const getLLMToken = useCallback(async (): Promise<string | undefined> => {
+    const { llmProvider } = llmSettings
+    switch (llmProvider) {
+      case 'gitee-llm':
+        return decryptTokenFromStore('gitee')
+      case 'modelscope-llm':
+        return decryptTokenFromStore('modelscope')
+      case 'huggingface-llm':
+        return decryptTokenFromStore('huggingface')
+      case 'deepseek':
+        return decryptTokenFromStore('deepseek')
+      default:
+        return undefined
+    }
+  }, [llmSettings])
+
+  // Optimize prompt handler
+  const handleOptimize = useCallback(async () => {
+    if (!prompt.trim() || isOptimizing) return
+
+    setIsOptimizing(true)
+    addStatus('Optimizing prompt...')
+
+    try {
+      const token = await getLLMToken()
+      const result = await optimizePrompt(
+        {
+          prompt,
+          provider: llmSettings.llmProvider,
+          model: llmSettings.llmModel,
+          lang: 'en',
+          systemPrompt: getEffectiveSystemPrompt(llmSettings.customSystemPrompt),
+        },
+        token
+      )
+
+      if (result.success) {
+        setPrompt(result.data.optimized)
+        addStatus('Prompt optimized!')
+        toast.success('Prompt optimized!')
+      } else {
+        addStatus(`Optimization failed: ${result.error}`)
+        toast.error(result.error)
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Optimization failed'
+      addStatus(`Error: ${msg}`)
+      toast.error(msg)
+    } finally {
+      setIsOptimizing(false)
+    }
+  }, [prompt, isOptimizing, llmSettings, getLLMToken, addStatus])
+
+  // Translate prompt handler
+  const handleTranslate = useCallback(async () => {
+    if (!prompt.trim() || isTranslating) return
+
+    setIsTranslating(true)
+    addStatus('Translating prompt...')
+
+    try {
+      const result = await translatePrompt(prompt)
+
+      if (result.success) {
+        setPrompt(result.data.translated)
+        addStatus('Prompt translated!')
+        toast.success('Prompt translated to English!')
+      } else {
+        addStatus(`Translation failed: ${result.error}`)
+        toast.error(result.error)
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Translation failed'
+      addStatus(`Error: ${msg}`)
+      toast.error(msg)
+    } finally {
+      setIsTranslating(false)
+    }
+  }, [prompt, isTranslating, addStatus])
+
   return {
     // State
     tokens,
@@ -259,6 +391,10 @@ export function useImageGenerator() {
     isBlurred,
     isUpscaled,
     isUpscaling,
+    // LLM State
+    llmSettings,
+    isOptimizing,
+    isTranslating,
     // Setters
     setProvider,
     setModel,
@@ -269,6 +405,11 @@ export function useImageGenerator() {
     setSteps,
     setShowInfo,
     setIsBlurred,
+    // LLM Setters
+    setLLMProvider,
+    setLLMModel,
+    setAutoTranslate,
+    setCustomSystemPrompt,
     // Handlers
     saveToken,
     handleRatioSelect,
@@ -277,5 +418,8 @@ export function useImageGenerator() {
     handleUpscale,
     handleDelete,
     handleGenerate,
+    // LLM Handlers
+    handleOptimize,
+    handleTranslate,
   }
 }
